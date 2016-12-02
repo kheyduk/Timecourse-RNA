@@ -1,0 +1,83 @@
+#clean masigpro history
+#Karolina Heyduk, University of Georgia, 2016
+#contact: heyduk@uga.edu
+
+#load data and libraries
+setwd("C:/Users/heyduk/Google Drive/Science/CAM transcription/2016/maProSig/")
+counts<-read.table("../monocot ortho/YG.counts.matrix")
+head(counts)
+library(edgeR)
+library(maSigPro)
+library(Mfuzz)
+
+#set up edgeR object
+groups<-c("YG.2.D","YG.6.D","YG.1.D","YG.5.D","YG.4.W","YG.1.D","YG.4.W","YG.2.W","YG.6.W","YG.6.D","YG.4.D","YG.5.D","YG.1.W","YG.5.W","YG.1.W","YG.5.D","YG.3.D","YG.1.W","YG.5.W","YG.3.D","YG.5.D","YG.4.D","YG.5.W","YG.6.W","YG.1.D","YG.6.D","YG.2.W","YG.4.W","YG.2.W","YG.3.W","YG.3.D","YG.3.W","YG.2.D","YG.3.W","YG.4.W","YG.5.W","YG.3.W","YG.1.D","YG.4.D","YG.3.D","YG.2.W","YG.2.D","YG.4.D","YG.2.D","YG.6.D") #this will be specific to your data. Not necessarily required, but nice for checking that replicates are similar
+counts$X6<-NULL
+counts$X36<-NULL
+dyg<-DGEList(counts, group=groups)
+dyg<-DGEList(counts, group=grpups)
+dyg<-calcNormFactors(dyg, method="TMM")
+normyg<-cpm(dyg, normalize.lib.sizes=TRUE)
+plotMDS(normyg, labels=groups)
+
+##remove genes that have all zero read counts
+normyg<-normyg[ rowSums(normyg)!=0, ]
+
+##load design object for masigpro. row order must be the same as the order of libraries in count matrix
+design<-read.csv("YG_design.csv")
+design
+rownames(design)<-design$X #make first column the rownames
+design
+design$X<-NULL
+d<-make.design.matrix(design, degree=5)
+
+##using the negative binomial options in masigpro, calculate polynomial regressions for each gene
+NBp<-p.vector(normyg, d, counts=TRUE) #please choose dis. family with care. default for counts is neg. binomial
+
+##TO REMOVE INFLUENTIAL GENES:
+NBt<-T.fit(NBp)
+influential<-NBt$influ.info
+inf.genenames<-colnames(influential)
+normyg<-normyg[!rownames(normyg) %in% inf.genenames, ]
+
+##pick k
+NBp<-p.vector(normyg, d, counts=TRUE)
+wss<-(nrow(NBp$SELEC)-1)*sum(apply(NBp$SELEC,2,var))
+for (i in 2:15) wss[i]<- sum(kmeans(NBp$SELEC, centers=i, iter.max=20)$withinss)
+plot(1:15, wss, type="b")
+
+##estimate m for mfuzz
+NBgenes<-ExpressionSet(assayData=NBp$SELEC)
+NBgenes.f<-filter.std(NBgenes, min.std=0)
+NBgenes.s<-standardise(NBgenes.f)
+m1<-mestimate(NBgenes.s)
+m1
+NBt<-T.fit(NBp)
+
+#load revised see.genes function (separate file, "see.genes.kh")
+profilesall<-see.genes.kh(NBp$SELEC, edesign=d$edesign, dis=d$dis, cluster.data=1, groups.vector=d$groups.vector, cluster.method="mfuzz", k=8, m=1.02, show.fit=TRUE)
+
+##get D vs W significant genes
+sigswd<-get.siggenes(NBt, rsq=0.7, vars="groups")
+
+##make a bunch of output tables
+WDgenes<-sigswd$sig.genes$droughtvswater$sig.profiles
+write.table(file="2016-10-12_YG_sigWD_genes.txt", WDgenes)
+WDgenesR2<-sigswd$sig.genes$droughtvswater$sig.pvalues$`R-squared`
+write.table(file="2016-10-12_YG_sigWD_R2.txt", WDgenesR2)
+WDgenespval<-sigswd$sig.genes$droughtvswater$sig.pvalues$`p-value`
+write.table(file="2016-10-12_YG_sigWD_pval.txt", WDgenespval)
+clustersYG$transcripts<-rownames(NBp$SELEC)
+clustersYG$cluster<-profilesall$cut
+clustersYG<-as.data.frame(clustersYG)
+write.table(file="yg_masigpro_clusters.txt", clustersYG)
+
+##plotting gene expression
+pepc<-fpkm[rownames(fpkm)=="TR17932|c0_g2_i5", ]
+PlotGroups(pepc, edesign=d$edesign, show.fit=T, dis=d$dis, groups.vector=d$groups.vector)
+pepc<-as.data.frame(pepc)
+pepc$time<-design$edesign$time
+pepc$treat<-design$edesign$water
+pepcD<-subset(pepc, treat=="0")
+pepcW<-subset(pepc, treat=="1")
+ggplot(pepcW, aes(time, pepc))+geom_smooth(data=pepcW, aes(x=time, y=pepc),fill="blue", color="blue", alpha=0.3)+geom_smooth(data=pepcD, aes(x=time, y=pepc),fill="red", color="red", alpha=0.3)+geom_point(aes(position=factor(time)), pch=21, size=2, fill="blue")+geom_point(data=pepcD, aes(position=factor(time)), pch=21, size=2, fill="red")+theme_bw()
